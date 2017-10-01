@@ -11,7 +11,7 @@ package ru.mail.polis;
  * <li>{@code DELETE /v0/entity?id=<ID>} -- remove data by {@code ID}. Returns {@code 202}.</li>
  * </ul>
  * <p>
- * {@code ID} is a non empty char sequence.
+ * {@code  ID} is a non empty char sequence.
  * <p>
  * In all the cases the storage may return:
  * <ul>

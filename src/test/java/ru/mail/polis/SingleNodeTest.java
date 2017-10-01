@@ -94,6 +94,7 @@ public class SingleNodeTest extends TestBase {
 
         // Insert
         assertEquals(201, upsert(key, value).getStatusLine().getStatusCode());
+        //System.out.println(upsert(key, value).getStatusLine().getStatusCode());
 
         // Check
         final HttpResponse response = get(key);
