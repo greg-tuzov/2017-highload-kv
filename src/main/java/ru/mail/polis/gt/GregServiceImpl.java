@@ -31,12 +31,11 @@ public class GregServiceImpl implements KVService {
     StatusHandler statusHandler;
     EntityHandler entityHandler;
     InsideHandler insideHandler;
-    ExecutorService service = Executors.newFixedThreadPool(3);
     private final CompletionService<ResponseWrapper> completionService;
 
     private class StatusHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange httpExchange) throws IOException {   //todo: возвращать инфу по поводу количества поднятых нод
+        public void handle(HttpExchange httpExchange) throws IOException {
             httpExchange.sendResponseHeaders(200, 0);
             httpExchange.close();
         }
@@ -333,8 +332,6 @@ public class GregServiceImpl implements KVService {
         int workingNodes = 0;
         String thisNode = "http://localhost:" + server.getAddress().getPort();
         ResponseWrapper resp;
-//        System.out.println("num nodes = " + nodes.size() + "\n" +
-//                            nodes.get(0) + "\n" + nodes.get(1) + "\n");
         for(String node : nodes) {
             if (node.equals(thisNode)) {
                 workingNodes++;
@@ -379,11 +376,9 @@ public class GregServiceImpl implements KVService {
     }
 
     enum HttpMethod {
-
         GET,
         PUT,
         DELETE
-
     }
 
     @Override
