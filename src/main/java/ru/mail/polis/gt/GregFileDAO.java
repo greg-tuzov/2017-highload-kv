@@ -24,8 +24,10 @@ public class GregFileDAO implements GregDAO {
         final byte[] value = new byte[(int) file.length()];
         try(InputStream is = new FileInputStream(file)) {
             if(is.read(value) != value.length) {
-                throw new IOException("Can't read file in one go");
+                //throw new IOException("Can't read file in one go");
             }
+        } catch (FileNotFoundException e) {
+            throw new NoSuchElementException();
         }
         return value;
     }

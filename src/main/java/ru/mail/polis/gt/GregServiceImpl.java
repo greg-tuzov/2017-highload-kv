@@ -3,6 +3,7 @@ package ru.mail.polis.gt;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.xml.internal.ws.policy.privateutil.PolicyUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.mail.polis.KVService;
@@ -107,10 +108,26 @@ public class GregServiceImpl implements KVService {
         public void handle(HttpExchange httpExchange) throws IOException {
             RequestWrapper request = new RequestWrapper(httpExchange.getRequestURI().getQuery(), topology);
 
-            if(request.isIdMissed()) {
+            if (request.isWrongFormat() || request.isIdMissed()) {
                 httpExchange.sendResponseHeaders(400, 0);
                 httpExchange.close();
                 return;
+            }
+
+            if (!request.isOldAPI()) {
+                //проверим что можем поддерживать требуемое количество реплик
+                try {
+                    int workingNodes = checkStatusOfOtherNodes(request);
+                    if (workingNodes < request.getFrom()) {
+                        httpExchange.sendResponseHeaders(504, 0);
+                        httpExchange.close();
+                        return;
+                    }
+                } catch (IOException e) {
+                    httpExchange.sendResponseHeaders(500, 0);
+                    httpExchange.close();
+                    return;
+                }
             }
 
             ResponseWrapper response = null;
@@ -192,22 +209,20 @@ public class GregServiceImpl implements KVService {
             performTaskOnSeveralNodes(GET, request, nodes, null);
 
             try {
+                byte[] data = null;
                 int success = 0;
-                int fail = 0;
                 ResponseWrapper resp = null;
                 for (int i = 0; i < request.getFrom(); i++) {
                     resp = completionService.take().get();
                     if (resp.getCode() == 200) {
                         success++;
-                    } else {
-                        fail++;
+                        data = resp.getData();
+                    } else if(resp.getCode() == 404) {
+                        return resp;
                     }
                 }
-                if (fail > 0) {
-                    return new ResponseWrapper(404);
-                }
                 if (success >= request.getAck()) {
-                    return resp;
+                    return new ResponseWrapper(200, data);
                 } else {
                     return new ResponseWrapper(504);
                 }
@@ -251,11 +266,6 @@ public class GregServiceImpl implements KVService {
                         break;
                     case PUT:
                         completionService.submit(() -> insideHandler.handlePut(request, data));
-
-                        //Future<ResponseWrapper> futurePut = service.submit(() -> insideHandler.handlePut(request, data));
-                        //procs.add(futurePut);
-//                        globalFuture1 = service.submit(
-//                                () -> insideHandler.handlePut(request, data));
                         break;
                     case DELETE:
                         completionService.submit(() -> insideHandler.handleDelete(request));
@@ -270,7 +280,7 @@ public class GregServiceImpl implements KVService {
         }
     }
 
-    private ResponseWrapper makeRequest(@NotNull HttpMethod method,
+    private ResponseWrapper makeRequest(HttpMethod method,
                                         @NotNull String to,
                                         @NotNull String idString,
                                         @Nullable byte[] data) {
@@ -300,6 +310,37 @@ public class GregServiceImpl implements KVService {
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    private int checkStatusOfOtherNodes(RequestWrapper request) throws IOException {
+        List<String> nodes = getNodesById(request.getId(), request.getFrom());
+        int workingNodes = 0;
+        String thisNode = "http://localhost:" + server.getAddress().getPort();
+        ResponseWrapper resp;
+        System.out.println("num nodes = " + nodes.size() + "\n" +
+                            nodes.get(0) + "\n" + nodes.get(1) + "\n");
+        for(String node : nodes) {
+            if (node.equals(thisNode)) {
+                workingNodes++;
+            } else {
+                HttpURLConnection conn = null;
+                try {
+                    URL url = new URL(node + "/v0/status");
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.connect();
+
+                    if (conn.getResponseCode() == 200) {
+                        workingNodes++;
+                    }
+                } catch (java.net.ConnectException e) {
+                    //все ок, просто не удалось достучаться до одной из нод => workingNodes не инкрементируется
+                } catch (IOException e) {
+                    throw e;
+                }
+            }
+        }
+        return workingNodes;
     }
 
     private byte[] readData(@NotNull InputStream is) throws IOException {
