@@ -4,45 +4,115 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import ru.mail.polis.KVService;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+import static ru.mail.polis.gt.GregServiceImpl.HttpMethod.DELETE;
+import static ru.mail.polis.gt.GregServiceImpl.HttpMethod.GET;
+import static ru.mail.polis.gt.GregServiceImpl.HttpMethod.PUT;
 
 public class GregServiceImpl implements KVService {
 
-    static final int OK = 200;
-    static final int CREATED = 201;
-    static final int ACCEPTED = 202;
-    static final int BAD_REQUEST = 400;
-    static final int NOT_FOUND = 404;
-    static final int NOT_ALLOWED = 405;
-    static final int SERVER_ERROR = 500;
-    static final int NOT_ENOUGH_REPLICAS = 504;
-
-    final static String PREFIX = "id=";
     @NotNull
     private final HttpServer server;
     @NotNull
     private final GregDAO dao;
-    private Set<String> topology;
-
+    private List<String> topology;
+    StatusHandler statusHandler;
+    EntityHandler entityHandler;
+    InsideHandler insideHandler;
+    ExecutorService service = Executors.newFixedThreadPool(3);
+    List<Future<ResponseWrapper>> procs;
+    private Future<ResponseWrapper> globalFuture1, globalFuture2, globalFuture3;
 
     private class StatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {   //todo: возвращать инфу по поводу количества поднятых нод
-            ResponseWrapper resp = new ResponseWrapper(200, httpExchange);
-            resp.successSend();
+            httpExchange.sendResponseHeaders(200, 0);
             httpExchange.close();
+        }
+    }
+
+    private class InsideHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange httpExchange) throws IOException {
+            RequestWrapper request = new RequestWrapper(httpExchange.getRequestURI().getQuery(), topology);
+
+            ResponseWrapper response = null;
+            switch(httpExchange.getRequestMethod()) {
+                case "GET":
+                    response = handleGet(request);
+                    break;
+                case "PUT":
+                    byte[] valPut = getDataFromHttpExchange(httpExchange);
+                    response = handlePut(request, valPut);
+                    break;
+                case "DELETE":
+                    response = handleDelete(request);
+                    break;
+                default:
+                    httpExchange.sendResponseHeaders(405,0);
+            }
+
+            if (response.hasData()) {
+                httpExchange.sendResponseHeaders(response.getCode(), response.getData().length);
+                httpExchange.getResponseBody().write(response.getData());
+            } else {
+                httpExchange.sendResponseHeaders(response.getCode(), 0);
+            }
+
+            httpExchange.close();
+        }
+
+        private ResponseWrapper handlePut(RequestWrapper request, byte[] data) {
+            try {
+                dao.upsert(request.getId(), data);
+                return new ResponseWrapper(201);
+            } catch (IOException | IllegalArgumentException e) {
+                return new ResponseWrapper(404);
+            }
+        }
+
+        private ResponseWrapper handleGet(RequestWrapper request) {
+            try {
+                final byte[] valueGet = dao.get(request.getId());
+                return new ResponseWrapper(200, valueGet);
+            } catch(NoSuchElementException e) {
+                return new ResponseWrapper(404);
+            } catch (IOException e) {
+                return new ResponseWrapper(500);
+            }
+        }
+
+        private ResponseWrapper handleDelete(RequestWrapper request) {
+            try {
+                dao.delete(request.getId());
+                return new ResponseWrapper(202);
+            } catch (IOException e) {
+                return new ResponseWrapper(500);
+            }
         }
     }
 
     private class EntityHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
-            RequestWrapper request = new RequestWrapper(httpExchange.getRequestURI().getQuery());
+            RequestWrapper request = new RequestWrapper(httpExchange.getRequestURI().getQuery(), topology);
 
             if(request.isIdMissed()) {
                 httpExchange.sendResponseHeaders(400, 0);
@@ -50,58 +120,222 @@ public class GregServiceImpl implements KVService {
                 return;
             }
 
+            ResponseWrapper response = null;
             switch(httpExchange.getRequestMethod()) {
                 case "GET":
-                    try {
-                        final byte[] valueGet = dao.get(request.getId());
-                        new ResponseWrapper(200, valueGet, httpExchange).successSend();
-                    } catch (IOException e) {
-                        httpExchange.sendResponseHeaders(404, 0);
-                    }
+                    response = handleGet(request);
                     break;
-
                 case "PUT":
-                    final int contentLength = Integer.valueOf(httpExchange.getRequestHeaders().getFirst("Content-Length"));
-                    final byte[] valuePut = new byte[contentLength];
-
-                    InputStream is = httpExchange.getRequestBody();
-                    for (int n = is.read(valuePut); n > 0; n = is.read(valuePut));
-                    dao.upsert(request.getId(), valuePut);
-
-                    new ResponseWrapper(201, httpExchange)
-                            .successSend();
+                    response = handlePut(httpExchange, request);
                     break;
-
                 case "DELETE":
-                    dao.delete(request.getId());
-                    new ResponseWrapper(202, httpExchange)
-                            .successSend();
+                    response = handleDelete(request);
                     break;
-
                 default:
                     httpExchange.sendResponseHeaders(405, 0);
             }
+
+            if (response.hasData()) {
+                httpExchange.sendResponseHeaders(response.getCode(), response.getData().length);
+                httpExchange.getResponseBody().write(response.getData());
+            } else {
+                httpExchange.sendResponseHeaders(response.getCode(), 0);
+            }
+
             httpExchange.close();
         }
-    }
 
+        public ResponseWrapper handleDelete(RequestWrapper request) throws IOException {
+            List<String> nodes = getNodesById(request.getId(), request.getFrom());
 
-    @NotNull
-    private static String extractId(@NotNull final String query) {
-        if(!query.startsWith(PREFIX)) {
-            throw new IllegalArgumentException("Shitty string");
+            performTaskOnSeveralNodes(DELETE, request, nodes, null);
+
+            try {
+                int success = 0;
+                for(int i = 0; i < request.getFrom(); i++) {
+                    Thread.sleep(500);
+                    ResponseWrapper resp = globalFuture3.get();
+                    if (resp.getCode() == 202) {
+                        success++;
+                    }
+                }
+                if (success >= request.getAck()) {
+                    return new ResponseWrapper(202);
+                } else {
+                    return new ResponseWrapper(504);
+                }
+            } catch(InterruptedException | ExecutionException e) {
+                return new ResponseWrapper(500);
+            }
         }
 
-        return query.substring(PREFIX.length());
+        public ResponseWrapper handlePut(HttpExchange httpExchange, RequestWrapper request) throws IOException {   //todo: Добавить отдельную ветку для обрабтки старого API(также нужно для реализации функционала INNER_YRI)
+            List<String> nodes = getNodesById(request.getId(), request.getFrom());
+            byte[] valPut = getDataFromHttpExchange(httpExchange);
+
+            performTaskOnSeveralNodes(PUT, request, nodes, valPut);
+
+            try {
+                int success = 0;
+                for(int i = 0; i < request.getFrom(); i++) {
+                    Thread.sleep(500);
+                    ResponseWrapper resp = globalFuture1.get();
+                    if(resp.getCode() == 201) {
+                        success++;
+                    }
+                }
+                if(success >= request.getAck()) {
+                    return new ResponseWrapper(201);
+                } else {
+                    return new ResponseWrapper(504);
+                }
+            } catch(InterruptedException | ExecutionException e) {
+                return new ResponseWrapper(500);
+            }
+        }
+
+        public ResponseWrapper handleGet(RequestWrapper request) throws IOException {
+            List<String> nodes = getNodesById(request.getId(), request.getFrom());
+
+            performTaskOnSeveralNodes(GET, request, nodes, null);
+
+            try {
+                int success = 0;
+                int fail = 0;
+                ResponseWrapper resp = null;
+                for (int i = 0; i < request.getFrom(); i++) {
+                    resp = globalFuture2.get();
+                    if (resp.getCode() == 200) {
+                        success++;
+                    } else {
+                        fail++;
+                    }
+                }
+                if (fail > 0) {
+                    return new ResponseWrapper(404);
+                }
+                if (success >= request.getAck()) {
+                    return resp;
+                } else {
+                    return new ResponseWrapper(504);
+                }
+            } catch(InterruptedException | ExecutionException e) {
+                return new ResponseWrapper(500);
+            }
+        }
     }
 
     public GregServiceImpl(int port, @NotNull final GregDAO dao, Set<String> topology) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
         this.dao = dao;
-        this.topology = topology;
+        this.topology = new ArrayList<>(topology);
 
-        this.server.createContext("/v0/status", new StatusHandler());
-        this.server.createContext("/v0/entity", new EntityHandler());
+        this.server.createContext("/v0/status", statusHandler = new StatusHandler());
+        this.server.createContext("/v0/entity", entityHandler = new EntityHandler());
+        this.server.createContext("/v0/inside", insideHandler = new InsideHandler());
+    }
+
+    public List<String> getNodesById(String id, int from) {
+        List<String> res = new ArrayList<>(from);
+        int hash = Math.abs(id.hashCode());
+        for (int i = 0; i < from; i++) {
+            res.add(topology.get((hash+i) % topology.size()));
+        }
+        return res;
+    }
+
+    private void performTaskOnSeveralNodes(@NotNull HttpMethod method,
+                                           @NotNull RequestWrapper request,
+                                           @NotNull List<String> nodes,
+                                           @Nullable byte[] data) {
+        String thisNode = "http://localhost:" + server.getAddress().getPort();
+        for (String node : nodes) {
+            if (node.equals(thisNode)) {
+                switch (method) {
+                    case GET:
+//                        Future<ResponseWrapper> futureGet = service.submit(() -> insideHandler.handleGet(request));
+//                        procs.add(futureGet);
+                        globalFuture2 = service.submit(
+                                () -> insideHandler.handleGet(request));
+                        break;
+                    case PUT:
+//                        Future<ResponseWrapper> futurePut = service.submit(() -> insideHandler.handlePut(request, data));
+//                        procs.add(futurePut);
+                        globalFuture1 = service.submit(
+                                () -> insideHandler.handlePut(request, data));
+                        break;
+                    case DELETE:
+                        globalFuture3 = service.submit(
+                                () -> insideHandler.handleDelete(request));
+                        break;
+                    default:
+                        throw new IllegalArgumentException("405");
+                }
+            } else {
+                Future<ResponseWrapper> future = service.submit(
+                        () -> makeRequest(method, node + "/v0/inside", "?id=" + request.getId(), data));
+                procs.add(future);
+            }
+        }
+    }
+
+    private ResponseWrapper makeRequest(@NotNull HttpMethod method,
+                                        @NotNull String to,
+                                        @NotNull String idString,
+                                        @Nullable byte[] data) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(to + idString);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod(method.toString());
+            conn.setDoOutput(method == PUT);
+            conn.connect();
+
+            if (method == PUT) {
+                conn.getOutputStream().write(data);
+                conn.getOutputStream().flush();
+                conn.getOutputStream().close();
+            }
+
+            int code = conn.getResponseCode();
+            if (method == GET && code == 200) {
+                InputStream dataStream = conn.getInputStream();
+                byte[] inputData = readData(dataStream);
+                return new ResponseWrapper(code, inputData);
+            }
+            return new ResponseWrapper(code);
+        } catch (IOException e) {
+            return new ResponseWrapper(500);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private byte[] readData(@NotNull InputStream is) throws IOException {
+        try (ByteArrayOutputStream os = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[1024];
+            for (int len; (len = is.read(buffer, 0, 1024)) != -1; ) {
+                os.write(buffer, 0, len);
+            }
+            os.flush();
+            return os.toByteArray();
+        }
+    }
+
+    public byte[] getDataFromHttpExchange(HttpExchange httpExchange) throws IOException {
+        final int contentLength = Integer.valueOf(httpExchange.getRequestHeaders().getFirst("Content-Length"));
+        final byte[] res = new byte[contentLength];
+        InputStream is = httpExchange.getRequestBody();
+        for (int n = is.read(res); n > 0; n = is.read(res));
+        return res;
+    }
+
+    enum HttpMethod {
+
+        GET,
+        PUT,
+        DELETE
+
     }
 
     @Override

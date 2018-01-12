@@ -1,20 +1,23 @@
 package ru.mail.polis.gt;
 
+import java.util.List;
+
 public class RequestWrapper {
 
-    private final String id;
-    private final int ack;
-    private final int from;
+    private String id;
+    private int ack;
+    private int from;
+    private byte[] data;
 
-    public RequestWrapper(String query) {
+    public RequestWrapper(String query, List<String> topology) {
         int idx = query.indexOf("=");
         int idxLast = query.lastIndexOf("=");
 
         if(idx == idxLast) {
             //single node api
             id = query.substring(idx+1, query.length());
-            ack = -1;
-            from = -1;
+            ack = topology.size() / 2 + 1;
+            from = topology.size();
         } else {
             //multi node api
             int idx2 = query.indexOf("&");
