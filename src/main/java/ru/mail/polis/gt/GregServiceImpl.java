@@ -219,21 +219,28 @@ public class GregServiceImpl implements KVService {
                         success++;
                         data = resp.getData();
                     } else if(resp.getCode() == 404) {
-                        return resp;
-                        //fail++;
+                        //return resp;
+                        fail++;
                     }
                 }
-
-//                //handling missed wright
-//                if (success != 0 && fail != 0) {
-//                    //todo: записать на все ноды на которых данно пары key:val нету
-//                    success += fail;
-//                }
+                //handling missed wright
+                boolean hasOnThisNode = insideHandler.handleGet(request).getCode() == 200;
+                if (!hasOnThisNode && fail == 1 && success > 0) {
+                    insideHandler.handlePut(request, data);
+                    success++;
+                    fail--;
+                } else if (success == 0) {
+                    return new ResponseWrapper(404);
+                }
 
                 if (success >= request.getAck()) {
                     return new ResponseWrapper(200, data);
                 } else {
-                    return new ResponseWrapper(504);
+                    if (success == 1 && hasOnThisNode) {
+                        return new ResponseWrapper(404);
+                    } else {
+                        return new ResponseWrapper(504);
+                    }
                 }
             } catch(InterruptedException | ExecutionException e) {
                 return new ResponseWrapper(500);
