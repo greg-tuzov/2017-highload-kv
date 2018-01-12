@@ -118,7 +118,7 @@ public class GregServiceImpl implements KVService {
                 //проверим что можем поддерживать требуемое количество реплик
                 try {
                     int workingNodes = checkStatusOfOtherNodes(request);
-                    if (workingNodes < request.getFrom()) {
+                    if (workingNodes < request.getAck()) {
                         httpExchange.sendResponseHeaders(504, 0);
                         httpExchange.close();
                         return;
@@ -211,6 +211,7 @@ public class GregServiceImpl implements KVService {
             try {
                 byte[] data = null;
                 int success = 0;
+                int fail = 0;
                 ResponseWrapper resp = null;
                 for (int i = 0; i < request.getFrom(); i++) {
                     resp = completionService.take().get();
@@ -219,8 +220,16 @@ public class GregServiceImpl implements KVService {
                         data = resp.getData();
                     } else if(resp.getCode() == 404) {
                         return resp;
+                        //fail++;
                     }
                 }
+
+//                //handling missed wright
+//                if (success != 0 && fail != 0) {
+//                    //todo: записать на все ноды на которых данно пары key:val нету
+//                    success += fail;
+//                }
+
                 if (success >= request.getAck()) {
                     return new ResponseWrapper(200, data);
                 } else {
@@ -317,8 +326,8 @@ public class GregServiceImpl implements KVService {
         int workingNodes = 0;
         String thisNode = "http://localhost:" + server.getAddress().getPort();
         ResponseWrapper resp;
-        System.out.println("num nodes = " + nodes.size() + "\n" +
-                            nodes.get(0) + "\n" + nodes.get(1) + "\n");
+//        System.out.println("num nodes = " + nodes.size() + "\n" +
+//                            nodes.get(0) + "\n" + nodes.get(1) + "\n");
         for(String node : nodes) {
             if (node.equals(thisNode)) {
                 workingNodes++;
