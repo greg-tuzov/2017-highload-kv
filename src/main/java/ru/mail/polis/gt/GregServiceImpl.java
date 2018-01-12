@@ -13,14 +13,8 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.NoSuchElementException;
-import java.util.Set;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.*;
+import java.util.concurrent.*;
 
 import static ru.mail.polis.gt.GregServiceImpl.HttpMethod.DELETE;
 import static ru.mail.polis.gt.GregServiceImpl.HttpMethod.GET;
@@ -37,8 +31,7 @@ public class GregServiceImpl implements KVService {
     EntityHandler entityHandler;
     InsideHandler insideHandler;
     ExecutorService service = Executors.newFixedThreadPool(3);
-    List<Future<ResponseWrapper>> procs;
-    private Future<ResponseWrapper> globalFuture1, globalFuture2, globalFuture3;
+    private final CompletionService<ResponseWrapper> completionService;
 
     private class StatusHandler implements HttpHandler {
         @Override
@@ -154,7 +147,7 @@ public class GregServiceImpl implements KVService {
                 int success = 0;
                 for(int i = 0; i < request.getFrom(); i++) {
                     Thread.sleep(500);
-                    ResponseWrapper resp = globalFuture3.get();
+                    ResponseWrapper resp = completionService.take().get();
                     if (resp.getCode() == 202) {
                         success++;
                     }
@@ -178,8 +171,7 @@ public class GregServiceImpl implements KVService {
             try {
                 int success = 0;
                 for(int i = 0; i < request.getFrom(); i++) {
-                    //Thread.sleep(500);
-                    ResponseWrapper resp = globalFuture1.get();
+                    ResponseWrapper resp = completionService.take().get();
                     if(resp.getCode() == 201) {
                         success++;
                     }
@@ -204,7 +196,7 @@ public class GregServiceImpl implements KVService {
                 int fail = 0;
                 ResponseWrapper resp = null;
                 for (int i = 0; i < request.getFrom(); i++) {
-                    resp = globalFuture2.get();
+                    resp = completionService.take().get();
                     if (resp.getCode() == 200) {
                         success++;
                     } else {
@@ -229,6 +221,8 @@ public class GregServiceImpl implements KVService {
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
         this.dao = dao;
         this.topology = new ArrayList<>(topology);
+        Executor executor = Executors.newFixedThreadPool(topology.size());
+        this.completionService = new ExecutorCompletionService<>(executor);
 
         this.server.createContext("/v0/status", statusHandler = new StatusHandler());
         this.server.createContext("/v0/entity", entityHandler = new EntityHandler());
@@ -253,28 +247,25 @@ public class GregServiceImpl implements KVService {
             if (node.equals(thisNode)) {
                 switch (method) {
                     case GET:
-//                        Future<ResponseWrapper> futureGet = service.submit(() -> insideHandler.handleGet(request));
-//                        procs.add(futureGet);
-                        globalFuture2 = service.submit(
-                                () -> insideHandler.handleGet(request));
+                        completionService.submit(() -> insideHandler.handleGet(request));
                         break;
                     case PUT:
-//                        Future<ResponseWrapper> futurePut = service.submit(() -> insideHandler.handlePut(request, data));
-//                        procs.add(futurePut);
-                        globalFuture1 = service.submit(
-                                () -> insideHandler.handlePut(request, data));
+                        completionService.submit(() -> insideHandler.handlePut(request, data));
+
+                        //Future<ResponseWrapper> futurePut = service.submit(() -> insideHandler.handlePut(request, data));
+                        //procs.add(futurePut);
+//                        globalFuture1 = service.submit(
+//                                () -> insideHandler.handlePut(request, data));
                         break;
                     case DELETE:
-                        globalFuture3 = service.submit(
-                                () -> insideHandler.handleDelete(request));
+                        completionService.submit(() -> insideHandler.handleDelete(request));
                         break;
                     default:
                         throw new IllegalArgumentException("405");
                 }
             } else {
-                Future<ResponseWrapper> future = service.submit(
+                completionService.submit(
                         () -> makeRequest(method, node + "/v0/inside", "?id=" + request.getId(), data));
-                procs.add(future);
             }
         }
     }
