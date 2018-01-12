@@ -178,7 +178,7 @@ public class GregServiceImpl implements KVService {
             try {
                 int success = 0;
                 for(int i = 0; i < request.getFrom(); i++) {
-                    Thread.sleep(500);
+                    //Thread.sleep(500);
                     ResponseWrapper resp = globalFuture1.get();
                     if(resp.getCode() == 201) {
                         success++;
