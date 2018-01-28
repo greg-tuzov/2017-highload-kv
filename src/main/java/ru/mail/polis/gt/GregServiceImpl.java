@@ -3,6 +3,15 @@ package ru.mail.polis.gt;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpDelete;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPut;
+import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.apache.http.util.EntityUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.mail.polis.KVService;
@@ -10,9 +19,7 @@ import ru.mail.polis.KVService;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.InetSocketAddress;
-import java.net.URL;
+import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -32,6 +39,11 @@ public class GregServiceImpl implements KVService {
     InsideHandler insideHandler;
     private final CompletionService<ResponseWrapper> completionService;
 
+    PoolingHttpClientConnectionManager pool = new PoolingHttpClientConnectionManager();
+    final CloseableHttpClient httpClient = HttpClients.custom()
+            .setConnectionManager(pool)
+            .build();
+
     private class StatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
@@ -43,6 +55,7 @@ public class GregServiceImpl implements KVService {
     }
 
     private class InsideHandler implements HttpHandler {
+
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
             RequestWrapper request = new RequestWrapper(httpExchange.getRequestURI().getQuery(), topology);
@@ -258,6 +271,9 @@ public class GregServiceImpl implements KVService {
         this.server.createContext("/v0/status", statusHandler = new StatusHandler());
         this.server.createContext("/v0/entity", entityHandler = new EntityHandler());
         this.server.createContext("/v0/inside", insideHandler = new InsideHandler());
+
+        pool.setDefaultMaxPerRoute(100);
+        pool.setMaxTotal(100);
     }
 
     public List<String> getNodesById(String id, int from) {
@@ -300,31 +316,42 @@ public class GregServiceImpl implements KVService {
                                         @NotNull String to,
                                         @NotNull String idString,
                                         @Nullable byte[] data) {
-        HttpURLConnection conn = null;
+
+        CloseableHttpResponse resp = null;
+        int code;
         try {
-            URL url = new URL(to + idString);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod(method.toString());
-            conn.setDoOutput(method == PUT);
-            conn.connect();
-
-            if (method == PUT) {
-                conn.getOutputStream().write(data);
-                conn.getOutputStream().flush();
-                conn.getOutputStream().close();
+            switch (method) {
+                case GET:
+                    HttpGet httpGet = new HttpGet(to + idString);
+                    resp = httpClient.execute(httpGet);
+                    code = resp.getStatusLine().getStatusCode();
+                    if (200 == code) {
+                        byte[] inputData = EntityUtils.toByteArray(resp.getEntity());
+                        return new ResponseWrapper(code, inputData);
+                    }
+                    return new ResponseWrapper(code);
+                case PUT:
+                    HttpPut httpPut = new HttpPut(to + idString);
+                    httpPut.setEntity(new ByteArrayEntity(data));
+                    resp = httpClient.execute(httpPut);
+                    code = resp.getStatusLine().getStatusCode();
+                    return new ResponseWrapper(code);
+                case DELETE:
+                    HttpDelete httpDelete = new HttpDelete(to + idString);
+                    resp = httpClient.execute(httpDelete);
+                    code = resp.getStatusLine().getStatusCode();
+                    return new ResponseWrapper(code);
+                default:
+                    return new ResponseWrapper(405);
             }
-
-            int code = conn.getResponseCode();
-            if (method == GET && code == 200) {
-                InputStream dataStream = conn.getInputStream();
-                byte[] inputData = readData(dataStream);
-                return new ResponseWrapper(code, inputData);
-            }
-            return new ResponseWrapper(code);
         } catch (IOException e) {
             return new ResponseWrapper(500);
         } finally {
-            if (conn != null) conn.disconnect();
+            try {
+                if (resp != null) resp.close();
+            } catch (IOException e) {
+                return new ResponseWrapper(500);
+            }
         }
     }
 
