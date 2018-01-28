@@ -35,7 +35,9 @@ public class GregServiceImpl implements KVService {
     private class StatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
-            httpExchange.sendResponseHeaders(200, 0);
+            final String response = "ONLINE";
+            httpExchange.sendResponseHeaders(200, response.length());
+            httpExchange.getResponseBody().write(response.getBytes());
             httpExchange.close();
         }
     }

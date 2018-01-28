@@ -1,0 +1,9 @@
+phantom:
+  address: 127.0.0.1:8080
+  ammofile: /var/loadtest/ammo.txt  
+  load_profile:
+    load_type: rps
+    schedule: line(1, 500, 20m)
+  instances: 1000
+telegraf:
+  enabled: false

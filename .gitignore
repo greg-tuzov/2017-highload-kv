@@ -13,5 +13,19 @@
 !README.md
 !settings.gradle
 
+# Results of load tests
+!*.txt
+!*.png
+!*.yaml
+
+# Some files in Ya-tank folder
+Ya-tank/ammo.txt
+Ya-tank/data
+Ya-tank/load.yaml
+Ya-tank/token.txt
+
+# Logs of load tests
+Ya-tank/logs/*
+
 # ...even if they are in subdirectories
 !*/
