@@ -3,6 +3,7 @@ package ru.mail.polis.gt;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpDelete;
 import org.apache.http.client.methods.HttpGet;
@@ -40,9 +41,7 @@ public class GregServiceImpl implements KVService {
     private final CompletionService<ResponseWrapper> completionService;
 
     PoolingHttpClientConnectionManager pool = new PoolingHttpClientConnectionManager();
-    final CloseableHttpClient httpClient = HttpClients.custom()
-            .setConnectionManager(pool)
-            .build();
+    CloseableHttpClient httpClient = null;
 
     private class StatusHandler implements HttpHandler {
         @Override
@@ -272,8 +271,12 @@ public class GregServiceImpl implements KVService {
         this.server.createContext("/v0/entity", entityHandler = new EntityHandler());
         this.server.createContext("/v0/inside", insideHandler = new InsideHandler());
 
-        pool.setDefaultMaxPerRoute(100);
-        pool.setMaxTotal(100);
+        //pool.setDefaultMaxPerRoute(10);
+        pool.setMaxTotal(500);
+
+        httpClient = HttpClients.custom()
+                .setConnectionManager(pool)
+                .build();
     }
 
     public List<String> getNodesById(String id, int from) {
@@ -326,8 +329,19 @@ public class GregServiceImpl implements KVService {
                     resp = httpClient.execute(httpGet);
                     code = resp.getStatusLine().getStatusCode();
                     if (200 == code) {
-                        byte[] inputData = EntityUtils.toByteArray(resp.getEntity());
-                        return new ResponseWrapper(code, inputData);
+//                        byte[] inputData = EntityUtils.toByteArray(resp.getEntity());
+//                        return new ResponseWrapper(code, inputData);
+                        HttpEntity entity = resp.getEntity();
+                        if (entity != null) {
+                            InputStream in = entity.getContent();
+                            try {
+                                byte[] inputData = new byte[(int) entity.getContentLength()];
+                                in.read(inputData);
+                                return new ResponseWrapper(code, inputData);
+                            } finally {
+                                in.close();
+                            }
+                        }
                     }
                     return new ResponseWrapper(code);
                 case PUT:

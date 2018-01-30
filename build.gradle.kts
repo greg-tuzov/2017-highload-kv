@@ -14,6 +14,9 @@ dependencies {
     // Annotations for better code documentation
     compile("com.intellij:annotations:12.0")
 
+    // For internodes requests
+    compile("org.apache.httpcomponents:httpclient:4.5")
+
     // JUnit test framework
     testCompile("junit:junit:4.12")
 
