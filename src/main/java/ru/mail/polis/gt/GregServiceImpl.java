@@ -321,35 +321,23 @@ public class GregServiceImpl implements KVService {
                                         @Nullable byte[] data) {
 
         CloseableHttpResponse resp = null;
+        HttpURLConnection conn = null;
         int code;
         try {
             switch (method) {
                 case GET:
-                    HttpGet httpGet = new HttpGet(to + idString);
-                    resp = httpClient.execute(httpGet);
-                    code = resp.getStatusLine().getStatusCode();
-                    try {
-                        if (200 == code) {
-                            byte[] inputData = EntityUtils.toByteArray(resp.getEntity());
-                            return new ResponseWrapper(code, inputData);
-//                        HttpEntity entity = resp.getEntity();
-//                        if (entity != null) {
-//                            InputStream in = entity.getContent();
-//                            try {
-//                                byte[] inputData = new byte[(int) entity.getContentLength()];
-//                                in.read(inputData);
-//                                return new ResponseWrapper(code, inputData);
-//                            } finally {
-//                                in.close();
-//                            }
-//                        }
-//                            byte[] inputData = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-//                            return new ResponseWrapper(code, inputData);
-                        }
-                        return new ResponseWrapper(code);
-                    } finally {
-                        resp.close();
+                    URL url = new URL(to + idString);
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod(method.toString());
+                    conn.connect();
+
+                    code = conn.getResponseCode();
+                    if (method == GET && code == 200) {
+                        InputStream dataStream = conn.getInputStream();
+                        byte[] inputData = readData(dataStream);
+                        return new ResponseWrapper(code, inputData);
                     }
+                    return new ResponseWrapper(code);
                 case PUT:
                     HttpPut httpPut = new HttpPut(to + idString);
                     httpPut.setEntity(new ByteArrayEntity(data));
@@ -369,6 +357,7 @@ public class GregServiceImpl implements KVService {
         } finally {
             try {
                 if (resp != null) resp.close();
+                if (conn != null) conn.disconnect();
             } catch (IOException e) {
                 return new ResponseWrapper(500);
             }
