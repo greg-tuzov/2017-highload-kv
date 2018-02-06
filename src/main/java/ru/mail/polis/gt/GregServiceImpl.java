@@ -272,7 +272,7 @@ public class GregServiceImpl implements KVService {
         this.server.createContext("/v0/inside", insideHandler = new InsideHandler());
 
         //pool.setDefaultMaxPerRoute(10);
-        pool.setMaxTotal(500);
+        pool.setMaxTotal(2000);
 
         httpClient = HttpClients.custom()
                 .setConnectionManager(pool)
@@ -328,22 +328,28 @@ public class GregServiceImpl implements KVService {
                     HttpGet httpGet = new HttpGet(to + idString);
                     resp = httpClient.execute(httpGet);
                     code = resp.getStatusLine().getStatusCode();
-                    if (200 == code) {
-//                        byte[] inputData = EntityUtils.toByteArray(resp.getEntity());
-//                        return new ResponseWrapper(code, inputData);
-                        HttpEntity entity = resp.getEntity();
-                        if (entity != null) {
-                            InputStream in = entity.getContent();
-                            try {
-                                byte[] inputData = new byte[(int) entity.getContentLength()];
-                                in.read(inputData);
-                                return new ResponseWrapper(code, inputData);
-                            } finally {
-                                in.close();
-                            }
+                    try {
+                        if (200 == code) {
+                            byte[] inputData = EntityUtils.toByteArray(resp.getEntity());
+                            return new ResponseWrapper(code, inputData);
+//                        HttpEntity entity = resp.getEntity();
+//                        if (entity != null) {
+//                            InputStream in = entity.getContent();
+//                            try {
+//                                byte[] inputData = new byte[(int) entity.getContentLength()];
+//                                in.read(inputData);
+//                                return new ResponseWrapper(code, inputData);
+//                            } finally {
+//                                in.close();
+//                            }
+//                        }
+//                            byte[] inputData = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+//                            return new ResponseWrapper(code, inputData);
                         }
+                        return new ResponseWrapper(code);
+                    } finally {
+                        resp.close();
                     }
-                    return new ResponseWrapper(code);
                 case PUT:
                     HttpPut httpPut = new HttpPut(to + idString);
                     httpPut.setEntity(new ByteArrayEntity(data));
