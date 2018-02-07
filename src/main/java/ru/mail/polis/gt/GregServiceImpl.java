@@ -282,7 +282,7 @@ public class GregServiceImpl implements KVService {
         this.server.createContext("/v0/inside", insideHandler = new InsideHandler());
 
         //pool.setDefaultMaxPerRoute(10);
-        pool.setMaxTotal(2000);
+        pool.setMaxTotal(200);
 
         httpClient = HttpClients.custom()
                 .setConnectionManager(pool)
@@ -344,7 +344,7 @@ public class GregServiceImpl implements KVService {
                     conn.connect();
 
                     code = conn.getResponseCode();
-                    if (method == GET && code == 200) {
+                    if (code == 200) {
                         InputStream dataStream = conn.getInputStream();
                         byte[] inputData = readData(dataStream);
                         return new ResponseWrapper(code, inputData);
@@ -438,7 +438,6 @@ public class GregServiceImpl implements KVService {
 
     @Override
     public void stop() {
-        cache.empty();
         this.server.stop(0);
     }
 }
