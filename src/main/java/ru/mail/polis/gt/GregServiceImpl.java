@@ -99,9 +99,8 @@ public class GregServiceImpl implements KVService {
 
         private ResponseWrapper handleGet(RequestWrapper request) {
             try {
-                final byte[] valueGet;
-                if (null != cache.getCacheEntry(request.getId())) {
-                    valueGet = cache.getCacheEntry(request.getId());
+                byte[] valueGet;
+                if (null != (valueGet = cache.getCacheEntry(request.getId()))) {
                 } else {
                     valueGet = dao.get(request.getId());
                     cache.addCacheEntry(request.getId(), valueGet);
