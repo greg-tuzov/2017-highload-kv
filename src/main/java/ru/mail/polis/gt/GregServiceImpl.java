@@ -43,6 +43,8 @@ public class GregServiceImpl implements KVService {
     PoolingHttpClientConnectionManager pool = new PoolingHttpClientConnectionManager();
     CloseableHttpClient httpClient = null;
 
+    private LFUCache cache;
+
     private class StatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
@@ -87,6 +89,7 @@ public class GregServiceImpl implements KVService {
 
         private ResponseWrapper handlePut(RequestWrapper request, byte[] data) {
             try {
+                cache.addCacheEntry(request.getId(), data);
                 dao.upsert(request.getId(), data);
                 return new ResponseWrapper(201);
             } catch (IOException | IllegalArgumentException e) {
@@ -96,7 +99,13 @@ public class GregServiceImpl implements KVService {
 
         private ResponseWrapper handleGet(RequestWrapper request) {
             try {
-                final byte[] valueGet = dao.get(request.getId());
+                final byte[] valueGet;
+                if (null != cache.getCacheEntry(request.getId())) {
+                    valueGet = cache.getCacheEntry(request.getId());
+                } else {
+                    valueGet = dao.get(request.getId());
+                    cache.addCacheEntry(request.getId(), valueGet);
+                }
                 return new ResponseWrapper(200, valueGet);
             } catch(NoSuchElementException e) {
                 return new ResponseWrapper(404);
@@ -107,6 +116,7 @@ public class GregServiceImpl implements KVService {
 
         private ResponseWrapper handleDelete(RequestWrapper request) {
             try {
+                cache.rm(request.getId());
                 dao.delete(request.getId());
                 return new ResponseWrapper(202);
             } catch (IOException e) {
@@ -277,6 +287,8 @@ public class GregServiceImpl implements KVService {
         httpClient = HttpClients.custom()
                 .setConnectionManager(pool)
                 .build();
+
+        this.cache = new LFUCache(100);
     }
 
     public List<String> getNodesById(String id, int from) {
@@ -420,11 +432,13 @@ public class GregServiceImpl implements KVService {
 
     @Override
     public void start() {
+        cache.empty();
         this.server.start();
     }
 
     @Override
     public void stop() {
+        cache.empty();
         this.server.stop(0);
     }
 }
